@@ -1,0 +1,69 @@
+# PTAC-198: Keep-alive CronJob for MS Workflows webhooks
+#
+# NOTE on schedule: the ticket says "every 180 days", but Power Automate
+# suspends flows after 90 days of inactivity — by day 180 the webhook is
+# already dead. Cron also cannot express "every N days" beyond a month
+# reliably. Monthly is cheap (one tiny message per webhook) and safe.
+#
+# Secret expected:
+#   kubectl create secret generic grafana-keepalive \
+#     --from-literal=GRAFANA_URL=https://grafana.example.com \
+#     --from-literal=GRAFANA_TOKEN=<service-account-token>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: msworkflows-webhook-keepalive
+  namespace: monitoring
+  labels:
+    app: msworkflows-webhook-keepalive
+    ticket: ptac-198
+spec:
+  schedule: "0 9 1 * *"          # 09:00 UTC on the 1st of every month
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app: msworkflows-webhook-keepalive
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: keepalive
+              image: python:3.12-slim   # stdlib only — no pip install needed
+              command: ["python", "/scripts/keep_alive.py"]
+              envFrom:
+                - secretRef:
+                    name: grafana-keepalive
+              env:
+                - name: PING_DELAY_SECONDS
+                  value: "5"
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: script
+              configMap:
+                name: msworkflows-keepalive-script
+                defaultMode: 0555
+---
+# Create/update the script ConfigMap with:
+#   kubectl -n monitoring create configmap msworkflows-keepalive-script \
+#     --from-file=keep_alive.py --dry-run=client -o yaml | kubectl apply -f -

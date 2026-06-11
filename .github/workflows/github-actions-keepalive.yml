@@ -1,0 +1,32 @@
+# Alternative to the k8s CronJob: run the keep-alive from GitHub Actions.
+# Put keep_alive.py in scripts/ and add GRAFANA_URL / GRAFANA_TOKEN as
+# repository secrets.
+name: msworkflows-webhook-keepalive
+
+on:
+  schedule:
+    - cron: "0 9 1 * *"   # 09:00 UTC, 1st of every month
+  workflow_dispatch:        # manual trigger for testing
+    inputs:
+      dry_run:
+        description: "List targets without sending"
+        type: boolean
+        default: true
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ping Power Automate webhooks
+        env:
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: python scripts/keep_alive.py
